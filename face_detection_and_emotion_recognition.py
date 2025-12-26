@@ -3,6 +3,7 @@
 """
 
 import typing
+from time import time
 from collections import deque
 
 import torch
@@ -21,12 +22,18 @@ mp_drawing_styles = mp.solutions.drawing_styles
 class FaceDetector:
     """Детектор лиц MediaPipe Full-Range (для разных дистанций)"""
 
-    def __init__(self, min_detection_confidence=0.5):
+    def __init__(self, *, min_detection_confidence=0.5, margin=20):
+        """
+
+        :param min_detection_confidence: Минимальный уровень уверенности модели, чтобы считать, что лицо есть
+        :param margin: Добавочный отступ к bbox, предсказанный моделью
+        """
         self.detector = mp_face_detection.FaceDetection(
             model_selection=1,  # 1 = full-range model (до 5 метров)
             min_detection_confidence=min_detection_confidence
         )
         self.name = "MediaPipe Full-Range"
+        self.margin = margin
 
     def detect(self, image: cv2.typing.MatLike) -> list[dict[str,
     tuple[int, int, int, int] | cv2.typing.MatLike | float | list[tuple[int, int]]]]:
@@ -44,11 +51,10 @@ class FaceDetector:
                 w_box = int(bbox.width * w)
                 h_box = int(bbox.height * h)
 
-                margin = 20
-                x1 = max(0, x - margin)
-                y1 = max(0, y - margin)
-                x2 = min(w, x + w_box + margin)
-                y2 = min(h, y + h_box + margin)
+                x1 = max(0, x - self.margin)
+                y1 = max(0, y - self.margin)
+                x2 = min(w, x + w_box + self.margin)
+                y2 = min(h, y + h_box + self.margin)
 
                 face_crop = image[y1:y2, x1:x2]
 
@@ -76,7 +82,7 @@ class FaceDetector:
 class EmotionRecognizer:
     """Распознавание с temporal smoothing + confidence thresholding"""
 
-    def __init__(self, device='cpu', window_size=15, alpha=0.3,
+    def __init__(self, *, device='cpu', window_size=15, alpha=0.3,
                  confidence_threshold=0.55, ambiguity_threshold=0.15,
                  model_name='enet_b2_8_best'):
         """
@@ -173,12 +179,15 @@ class EmotionRecognizer:
 
             return top_emotion, confidence
 
-        except Exception as e:
-            print(f"Ошибка распознавания: {e}")
-            import traceback
-            traceback.print_exc()
+        except (torch.cuda.OutOfMemoryError, MemoryError):
+            # Критично - пробрасываем выше для обработки
+            print('Out of memory in EmotionRecognizer.predict()')
+            raise
 
-        return "Neutral", 0.0
+        except (ValueError, RuntimeError, AttributeError) as e:
+            # Ожидаемые проблемы обработки - логируем и fallback
+            print(f"Предупреждение при распознавании: {e}")
+            return "Neutral", 0.0
 
     def reset(self):
         """Сброс истории"""
@@ -221,7 +230,15 @@ class CaptureReadError(Exception): pass
 def process_video_stream(video_stream: cv2.VideoCapture,
                          face_detector_and_emotion_recognizer: typing.Optional[DetectFaceAndRecognizeEmotion] = None, *,
                          flip_h: bool = False):
-    if face_detector_and_emotion_recognizer is None:
+    """
+    Обрабатывает видеопоток, находя лица и распознавая эмоции
+    :param video_stream: Видео поток
+    :param face_detector_and_emotion_recognizer: То, с помощью чего обрабатывается видеопоток
+    :param flip_h: Отзеркалить входящий видеопоток
+    :return: Генератор, который возвращает обработанный кадр и эмоции. Формат: (image, [(emotion, confidence), ...])
+    """
+    use_inner_models = face_detector_and_emotion_recognizer is None
+    if use_inner_models:
         face_detector = FaceDetector(min_detection_confidence=0.5)
         emotion_recognizer = EmotionRecognizer(
             device='cuda' if torch.cuda.is_available() else 'cpu',
@@ -234,37 +251,44 @@ def process_video_stream(video_stream: cv2.VideoCapture,
 
     if not video_stream.isOpened():
         raise CaptureReadError('"video_stream" is not opened')
-    while True:
-        ret_val, img = video_stream.read()
-        if not ret_val:
-            raise CaptureReadError('Failed to get image from "video_stream"')
-        if flip_h:
-            img = cv2.flip(img, 1)
-        new_img, emotions = face_detector_and_emotion_recognizer.detect_and_recognize(img)
-        yield new_img, emotions
+    try:
+        while True:
+            ret_val, img = video_stream.read()
+            if not ret_val:
+                raise CaptureReadError('Failed to get image from "video_stream"')
+            if flip_h:
+                img = cv2.flip(img, 1)
+            new_img, emotions = face_detector_and_emotion_recognizer.detect_and_recognize(img)
+            yield new_img, emotions
+    finally:
+        if use_inner_models:
+            face_detector.close()
+            emotion_recognizer.reset()
+            del face_detector_and_emotion_recognizer
 
 
 if __name__ == '__main__':
-    from time import time
-    from queue import Queue
-
+    print('Using camera 0')
     cap = cv2.VideoCapture(0)
-    fps_history = Queue()
+    fps_history = deque()
     FPS_HISTORY_LEN = 3  # для более гладкого fps, будет выводится средние из последних FPS_HISTORY_LEN измерений
+
     for _ in range(FPS_HISTORY_LEN):
-        fps_history.put(0.0)
+        fps_history.append(0.0)
     try:
         start_time = time()
         for img, emotions in process_video_stream(cap, flip_h=True):
-            cv2.putText(img, f'FPS: {round(sum(fps_history.queue) / FPS_HISTORY_LEN)}', (5, 20),
+            cv2.putText(img, f'FPS: {round(sum(fps_history) / FPS_HISTORY_LEN)}', (5, 20),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 255), 2)
             cv2.imshow('Test', img)
-            if cv2.waitKey(1) == 27:
+            if cv2.waitKey(1) & 0xFF == 27:
                 break  # esc to quit
             fps = 1 / (time() - start_time)
-            fps_history.put(fps)
-            fps_history.get()
+            fps_history.append(fps)
+            fps_history.popleft()
             start_time = time()
     finally:
+        print('Releasing resources...')
         cap.release()
         cv2.destroyAllWindows()
+        print('Done!')
