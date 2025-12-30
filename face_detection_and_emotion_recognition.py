@@ -123,14 +123,14 @@ class EmotionRecognizer:
             model_name: Имя модели
         """
         if not isinstance(device, str):
-            raise TypeError(f'Type of "device" should be str, got {type(device)}')
+            raise TypeError(f'Type of "device" should be str, got {type(device).__name__}')
         if device not in ['cpu', 'cuda']:
             raise ValueError(f'"device" should be "cpu" or "cuda". Got "{device}"')
         self._validate_window_size(window_size)
         self._validate_confidence_threshold(confidence_threshold)
         self._validate_ambiguity_threshold(ambiguity_threshold)
-        if type(model_name) is not str:
-            raise TypeError(f'Type of "model_name" should be str, got {type(model_name)}')
+        if not isinstance(model_name, str):
+            raise TypeError(f'Type of "model_name" should be str, got {type(model_name).__name__}')
         if model_name not in get_model_list():
             raise ValueError(f'Unknown "model_name". Got "{model_name}". Available models: {get_model_list()}')
 
@@ -152,7 +152,7 @@ class EmotionRecognizer:
     @staticmethod
     def _validate_window_size(window_size: int):
         if not isinstance(window_size, int):
-            raise TypeError(f'Type of "window_size" should be int, got {type(window_size)}')
+            raise TypeError(f'Type of "window_size" should be int, got {type(window_size).__name__}')
         if window_size < 0:
             raise ValueError(f'"window_size" should be >= 0')
 
@@ -163,7 +163,7 @@ class EmotionRecognizer:
     @staticmethod
     def _validate_confidence_threshold(confidence_threshold: float):
         if not isinstance(confidence_threshold, (float, int)):
-            raise TypeError(f'Type of "confidence_threshold" should be float, got {type(confidence_threshold)}')
+            raise TypeError(f'Type of "confidence_threshold" should be float, got {type(confidence_threshold).__name__}')
         if confidence_threshold < 0 or confidence_threshold > 1:
             raise ValueError(f'"confidence_threshold" should be in [0;1]')
 
@@ -174,7 +174,7 @@ class EmotionRecognizer:
     @staticmethod
     def _validate_ambiguity_threshold(ambiguity_threshold: float):
         if not isinstance(ambiguity_threshold, (float, int)):
-            raise TypeError(f'Type of "ambiguity_threshold" should be float, got {type(ambiguity_threshold)}')
+            raise TypeError(f'Type of "ambiguity_threshold" should be float, got {type(ambiguity_threshold).__name__}')
         if ambiguity_threshold < 0 or ambiguity_threshold > 1:
             raise ValueError(f'"ambiguity_threshold" should be in [0;1]')
 
